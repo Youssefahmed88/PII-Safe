@@ -1,0 +1,112 @@
+# Technical Proposal: Real-Time Output Guardrails & Cognitive Firewall
+
+## **The Big Picture: Securing the Final Exit Point**
+
+```mermaid
+graph TD
+    A[AI Agent Output] --> B{PII-Safe Guardrail}
+    B -->|Search via Trie| C[Mapping Check]
+    B -->|Search via Trie| D[Honey-Trap Check]
+    C -->|Found Leak| E[Redact with Pseudonym]
+    D -->|Found Trap| F[Flag Breach & Redact]
+    E --> G[Safe Sanitized Output]
+    F --> G
+```
+
+---
+
+## **Layered Output Defense: How it works**
+
+### **Layer 1: Outcome Correction (PII Mapping)**
+We perform a final "Sweep" of the AI's output for known PII. If the LLM output contains a raw value (e.g., `ali@email.com`), it is automatically swapped back to its pseudonym (`[USER_1]`).
+
+### **Layer 2: Behavioral Detection (Granular Honey-Tokens)**
+We inject unique, high-entropy "Trap Tokens" (Canaries). The presence of any trap in the output is a **Deterministic Indicator of Compromise (IoC)**.
+
+---
+
+## **The Algorithmic Flow (Trie Matching Mechanics)**
+
+```mermaid
+graph LR
+    Root((Root)) --> P((P))
+    P --> I1((I))
+    I1 --> I2((I))
+    I2 -->|Match Found| Out1[PII Found!]
+    I2 -->|Fail Link| S((_))
+    S --> A((A))
+    A --> F((F))
+    F --> E((E))
+    E -->|Match Found| Out2[PII_SAFE Found!]
+```
+
+### **Fail-Link: The Smart Search Continuity**
+
+One common question in multi-pattern matching is: *"If a specific word match fails, why do we continue scanning?"*
+
+Our engine doesn't just search for "words"; it monitors the **entire text stream**. Here is why the "Fail-Link" is essential:
+
+- **The Radar Analogy:** Even if we were looking for `test@gmail.com` and the AI outputs `tes@gmail.com`, we don't stop. The `@` sign that caused the "failure" for the first email might be the exact middle point for another forbidden email (e.g., `admin@gmail.com`).
+- **Zero-Waste Scanning:** The Fail-Link ensures that we never skip a character. If a match fails at node X, we jump to the next best node in the Trie that matches our current suffix. This ensures **Total Coverage** without having to re-read any character.
+
+---
+
+## **Performance: Complexity & Scalability**
+
+We utilize the **Aho-Corasick Automaton**, which ensures that the scanning speed is independent of the number of items we are guarding.
+
+### **Efficiency Analysis Table**
+
+| Metric | Traditional Search | **Our Aho-Corasick Engine** |
+| :--- | :--- | :--- |
+| **Search Complexity** | **O(Text Length * Secret Count)** | **O(Text Length only)** |
+| **Passes over Output** | Multiple Passes | **Single-Pass (Atomic)** |
+| **Scalability** | Slows down as secrets increase | **Maintains speed as secrets increase** |
+
+---
+
+## **Engineering Implementation Snippets**
+
+### **1. Building the Search Tree (From Map Contents)**
+We take the sensitive keys from our Session Map and build a character-by-character search tree.
+
+```python
+def add_pattern(self, pattern):
+    node = 0
+    # We walk through each character and create a branch if it's new.
+    # This is how we map out the 'forbidden paths' in one tree.
+    for char in pattern:
+        if char not in self.trie[node]['next']:
+            self.trie.append({'next': {}, 'fail': 0, 'output': []})
+            self.trie[node]['next'][char] = len(self.trie) - 1
+        node = self.trie[node]['next'][char]
+    
+    # Once we hit the last character, we mark this path as a full match.
+    self.trie[node]['output'].append(pattern)
+```
+
+### **2. The Security Filter (Unified Guardrail)**
+This is where the magic happens. We scan for both real PII and our secret traps in one single pass for maximum speed.
+
+```python
+def run_output_guardrail(text, token_map, honey_tokens):
+    # We combine everything we want to catch into one search list.
+    # Traps get a special mask, and real PII gets its specific pseudonym.
+    unified_map = {trap: "[REDACTED_SECURITY_SENSITIVE]" for trap in honey_tokens}
+    unified_map.update(token_map)
+    
+    # Fire up the high-speed search engine
+    ac_engine = AhoCorasick(list(unified_map.keys()))
+    clean_text, count, found_patterns = ac_engine.search_and_replace(text, unified_map)
+    
+    # Security Forensics: Did we find any of our secret honey-tokens?
+    matched_traps = [p for p in found_patterns if p in honey_tokens]
+    if matched_traps:
+        # If a trap is triggered, we know an exfiltration attempt occurred.
+        is_compromised = True 
+```
+
+---
+
+## **Summary**
+This implementation transforms PII-Safe into an **Intelligent Firewall**, ensuring data remains within authorized boundaries through high-speed, structural scanning.
